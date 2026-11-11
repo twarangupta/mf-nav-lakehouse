@@ -1,10 +1,10 @@
-# CI: lint and unit tests on every push and pull request to main.
+# CI: lint and unit tests on every push to dev or main, and on pull requests to main.
 # No secrets, no network calls to Databricks, AWS or AMFI. Everything runs on the runner.
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
     branches: [main]
 
