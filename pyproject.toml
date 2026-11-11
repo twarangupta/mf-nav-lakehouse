@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "mf-nav-lakehouse"
 version = "0.1.0"
@@ -8,20 +12,29 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Laptop and CI tools. Kept small on purpose: pyspark (and Java in CI)
+# are added only when the first PySpark unit test needs them.
 dev = [
-    "pyspark>=3.5,<4.1",
-    "delta-spark>=3.2",
     "pytest>=8",
-    "chispa>=0.10",
-    "ruff>=0.6",
+    # Pinned to one minor version so the laptop and CI format code identically.
+    "ruff>=0.17,<0.18",
 ]
+
+[tool.setuptools.packages.find]
+# Only src/ is an installable package; dags/, tests/, docs/, infra/ are not.
+include = ["src*"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.format]
+# Code snippets inside the Markdown docs are teaching examples, aligned by hand.
+exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]

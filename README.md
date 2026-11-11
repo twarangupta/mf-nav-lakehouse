@@ -1,5 +1,7 @@
 # Mutual Fund NAV Lakehouse
 
+[![CI](https://github.com/twarangupta/mf-nav-lakehouse/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/twarangupta/mf-nav-lakehouse/actions/workflows/ci.yml)
+
 A daily batch pipeline that collects Net Asset Value (NAV) data for every Indian mutual fund scheme from AMFI, stores it in a Delta Lake lakehouse on Databricks using the Medallion architecture (Bronze, Silver, Gold), computes fund analytics (rolling returns, CAGR, volatility, drawdown) and is orchestrated end to end by Apache Airflow.
 
 Status: Phase 0 (setup). See [docs/PROGRESS.md](docs/PROGRESS.md).
@@ -36,6 +38,7 @@ IDCW (dividend) NAVs drop on every payout, so they are not total-return series. 
 dags/          Airflow DAGs
 src/jobs/      PySpark jobs run on Databricks (bronze, silver, gold)
 tests/         pytest unit tests and DAG integrity test
+.github/       CI workflow (ruff + pytest on every push and pull request)
 infra/aws/     least-privilege IAM policy for the S3 uploader
 infra/airflow/ local Airflow in Docker (built in Phase 6)
 docs/          setup findings, decisions, progress, learning guide, glossary
