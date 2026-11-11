@@ -44,7 +44,8 @@ docs/          setup findings, decisions, progress, learning guide, glossary
 ## Docs
 
 - [docs/setup.md](docs/setup.md): Phase 0 checks (Databricks Free Edition limits, S3, Airflow plan, source data)
-- [docs/decisions.md](docs/decisions.md): design choices with alternatives and trade-offs
+- [docs/BUILD_LOG.md](docs/BUILD_LOG.md): step-by-step record of how the project was built, enough to rebuild it by hand
+- [docs/decisions.md](docs/decisions.md): decision log with options, trade-offs and when to revisit
 - [docs/LEARNING_GUIDE.md](docs/LEARNING_GUIDE.md): study guide, phase by phase
 - [docs/glossary.md](docs/glossary.md)
 
