@@ -8,6 +8,13 @@ Run on Databricks (serverless) as a Python script task:
 
     bronze_nav.py --source-path s3://<bucket>/raw/nav/date=2026-11-11/ --run-id manual-1
 
+Where the files come from (decision D1):
+- s3://...    the official source. Read with boto3 on the driver, using a read-only
+              IAM user key kept in the Databricks secret scope `mf_nav`. (The Unity
+              Catalog IAM-role route is blocked by the AWS free plan's cross-region
+              guardrail, so Spark cannot read s3:// paths natively here.)
+- /Volumes/...  documented fallback only: read natively by Spark.
+
 Rerunning the same file adds nothing: a file whose (nav_file_date, file_sha256) is
 already in the table is skipped, so the job is idempotent.
 """
@@ -15,11 +22,17 @@ already in the table is skipped, so the job is idempotent.
 from __future__ import annotations
 
 import argparse
+from urllib.parse import urlparse
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 BRONZE_TABLE = "mf_nav.bronze.nav_raw_lines"
+SECRET_SCOPE = "mf_nav"
+SECRET_KEY_ID = "s3_reader_access_key_id"
+SECRET_KEY_SECRET = "s3_reader_secret_access_key"  # noqa: S105 (a key name, not a secret)
+DEFAULT_AWS_REGION = "ap-southeast-2"
+FILES_SCHEMA = "path string, content binary"
 
 BRONZE_DDL = f"""
 CREATE TABLE IF NOT EXISTS {BRONZE_TABLE} (
@@ -36,8 +49,52 @@ COMMENT 'Bronze: raw AMFI NAV file lines, append-only, unparsed'
 """
 
 
+def split_s3_uri(uri: str) -> tuple[str, str]:
+    """'s3://bucket/raw/nav/date=X/' -> ('bucket', 'raw/nav/date=X/')."""
+    parsed = urlparse(uri)
+    if parsed.scheme != "s3" or not parsed.netloc:
+        raise ValueError(f"not an s3:// URI: {uri!r}")
+    return parsed.netloc, parsed.path.lstrip("/")
+
+
+def read_s3_files(spark: SparkSession, source_path: str, s3) -> DataFrame:
+    """Download every .txt object under an s3:// prefix with boto3 (on the driver).
+
+    Returns the same shape as read_raw_files: one row per file, `path` and exact
+    `content` bytes. Daily files are 1.5 MB and history chunks about 5 MB, so pulling
+    them through the driver is fine. `s3` is a boto3 S3 client (a fake in tests).
+    """
+    bucket, prefix = split_s3_uri(source_path)
+    rows = []
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            if obj["Key"].endswith(".txt"):
+                body = s3.get_object(Bucket=bucket, Key=obj["Key"])["Body"].read()
+                rows.append((f"s3://{bucket}/{obj['Key']}", bytearray(body)))
+    if not rows:
+        raise FileNotFoundError(f"no .txt files under {source_path}")
+    return spark.createDataFrame(rows, FILES_SCHEMA)
+
+
+def s3_client_from_secrets(region: str = DEFAULT_AWS_REGION):
+    """boto3 S3 client using the read-only key from the Databricks secret scope.
+
+    Values are only passed to boto3, never printed (Databricks would show
+    [REDACTED] anyway).
+    """
+    import boto3  # preinstalled on serverless environment v4
+    from databricks.sdk.runtime import dbutils
+
+    return boto3.client(
+        "s3",
+        region_name=region,
+        aws_access_key_id=dbutils.secrets.get(SECRET_SCOPE, SECRET_KEY_ID),
+        aws_secret_access_key=dbutils.secrets.get(SECRET_SCOPE, SECRET_KEY_SECRET),
+    )
+
+
 def read_raw_files(spark: SparkSession, source_path: str) -> DataFrame:
-    """Read each file as raw bytes: one row per file with `path` and `content`.
+    """Read each file under a Volume path as raw bytes (fallback route).
 
     binaryFile keeps the exact bytes, so the SHA-256 matches the one the downloader
     stored in S3 metadata, and we decide how to split lines ourselves.
@@ -119,12 +176,23 @@ def check_source_path(source_path: str) -> None:
         )
 
 
-def run(spark: SparkSession, source_path: str, run_id: str, table: str = BRONZE_TABLE) -> int:
+def run(
+    spark: SparkSession,
+    source_path: str,
+    run_id: str,
+    table: str = BRONZE_TABLE,
+    s3=None,
+    aws_region: str = DEFAULT_AWS_REGION,
+) -> int:
     """Load all raw files under source_path into Bronze. Returns rows appended."""
     check_source_path(source_path)
     spark.sql("CREATE SCHEMA IF NOT EXISTS mf_nav.bronze")
     spark.sql(BRONZE_DDL.replace(BRONZE_TABLE, table))
-    lines = explode_lines(read_raw_files(spark, source_path), run_id)
+    if source_path.startswith("s3://"):
+        files = read_s3_files(spark, source_path, s3 or s3_client_from_secrets(aws_region))
+    else:
+        files = read_raw_files(spark, source_path)
+    lines = explode_lines(files, run_id)
     new_lines = only_new_files(lines, spark.table(table))
     # No df.cache() here: serverless rejects it on older client environments. Instead,
     # isEmpty() is a cheap check, and the row count comes from the Delta commit itself.
@@ -146,9 +214,10 @@ def main() -> None:
     parser.add_argument("--source-path", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--table", default=BRONZE_TABLE)
+    parser.add_argument("--aws-region", default=DEFAULT_AWS_REGION)
     args = parser.parse_args()
     spark = SparkSession.builder.getOrCreate()
-    run(spark, args.source_path, args.run_id, args.table)
+    run(spark, args.source_path, args.run_id, args.table, aws_region=args.aws_region)
 
 
 if __name__ == "__main__":

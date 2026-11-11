@@ -84,3 +84,69 @@ def test_source_path_guard_rejects_windows_rewritten_path():
     check_source_path("/Volumes/mf_nav/raw/landing/nav/date=2026-11-11/")
     with pytest.raises(ValueError, match="MSYS_NO_PATHCONV"):
         check_source_path("C:/Program Files/Git/Volumes/mf_nav/raw/landing/")
+
+
+class _Body:
+    def __init__(self, data):
+        self._data = data
+
+    def read(self):
+        return self._data
+
+
+class FakeS3Reader:
+    """Just enough of boto3's S3 client for read_s3_files (list + get)."""
+
+    def __init__(self, objects):
+        self.objects = objects  # {key: bytes}
+        self.got = []
+
+    def get_paginator(self, name):
+        assert name == "list_objects_v2"
+        objects = self.objects
+
+        class _Pages:
+            def paginate(self, Bucket, Prefix):  # noqa: N803 (boto3 argument names)
+                keys = [k for k in objects if k.startswith(Prefix)]
+                yield {"Contents": [{"Key": k} for k in keys]}
+
+        return _Pages()
+
+    def get_object(self, Bucket, Key):  # noqa: N803
+        self.got.append(Key)
+        return {"Body": _Body(self.objects[Key])}
+
+
+def test_split_s3_uri():
+    from src.jobs.bronze_nav import split_s3_uri
+
+    assert split_s3_uri("s3://b/raw/nav/date=2026-11-11/") == ("b", "raw/nav/date=2026-11-11/")
+
+
+def test_read_s3_files_returns_exact_bytes_and_s3_paths(spark):
+    from src.jobs.bronze_nav import read_s3_files
+
+    fake = FakeS3Reader(
+        {
+            "raw/nav/date=2026-11-11/NAVAll.txt": CONTENT,
+            "raw/nav/date=2026-11-11/notes.csv": b"ignored",
+            "raw/_connection_test/hello.txt": b"never read",
+        }
+    )
+    files = read_s3_files(spark, "s3://bucket/raw/nav/date=2026-11-11/", fake)
+    rows = files.collect()
+    assert [r.path for r in rows] == [PATH]
+    assert bytes(rows[0].content) == CONTENT
+    assert fake.got == ["raw/nav/date=2026-11-11/NAVAll.txt"]  # only .txt under the prefix
+    lines = explode_lines(files, "r").collect()
+    assert len(lines) == 6
+    assert lines[0].file_sha256 == hashlib.sha256(CONTENT).hexdigest()
+
+
+def test_read_s3_files_fails_loudly_when_prefix_is_empty(spark):
+    import pytest
+
+    from src.jobs.bronze_nav import read_s3_files
+
+    with pytest.raises(FileNotFoundError):
+        read_s3_files(spark, "s3://bucket/raw/nav/date=2030-01-01/", FakeS3Reader({}))

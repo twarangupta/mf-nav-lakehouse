@@ -11,8 +11,14 @@ import importlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CODE_DIRS = [ROOT / "src", ROOT / "dags"]
-SECRET_VARS = {"DATABRICKS_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}
+CODE_DIRS = [ROOT / "src", ROOT / "dags", ROOT / "scripts"]
+SECRET_VARS = {
+    "DATABRICKS_TOKEN",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "S3_READER_ACCESS_KEY_ID",
+    "S3_READER_SECRET_ACCESS_KEY",
+}
 
 
 def _env_example() -> dict[str, str]:

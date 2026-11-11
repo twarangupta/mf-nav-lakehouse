@@ -6,7 +6,7 @@
       "Principal": {
         "AWS": [
           "arn:aws:iam::414351767826:role/unity-catalog-prod-UCMasterRole-14S5ZJVKOTYTL",
-          "arn:aws:iam::REPLACE_WITH_AWS_ACCOUNT_ID:role/mf-nav-databricks-read"
+          "arn:aws:iam::REPLACE_WITH_AWS_ACCOUNT_ID:role/mf-nav-databricks-role"
         ]
       },
       "Action": "sts:AssumeRole",
