@@ -1,0 +1,18 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::414351767826:role/unity-catalog-prod-UCMasterRole-14S5ZJVKOTYTL",
+          "arn:aws:iam::REPLACE_WITH_AWS_ACCOUNT_ID:role/mf-nav-databricks-read"
+        ]
+      },
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringEquals": { "sts:ExternalId": "REPLACE_WITH_EXTERNAL_ID_FROM_DATABRICKS" }
+      }
+    }
+  ]
+}

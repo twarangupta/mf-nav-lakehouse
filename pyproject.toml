@@ -9,12 +9,14 @@ description = "Daily AMFI mutual fund NAV pipeline: Airflow, S3, Databricks, Del
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "requests>=2.32",
+    "boto3>=1.34",
 ]
 
 [project.optional-dependencies]
-# Laptop and CI tools. Kept small on purpose: pyspark (and Java in CI)
-# are added only when the first PySpark unit test needs them.
+# Laptop and CI tools. pyspark runs the Bronze/Silver/Gold unit tests on a local
+# SparkSession (needs Java 17). Pinned to one minor version for repeatable tests.
 dev = [
+    "pyspark>=3.5,<3.6",
     "pytest>=8",
     # Pinned to one minor version so the laptop and CI format code identically.
     "ruff>=0.17,<0.18",

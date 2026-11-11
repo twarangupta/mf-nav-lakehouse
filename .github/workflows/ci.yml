@@ -32,6 +32,12 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
+      - name: Set up Java 17 (local Spark for PySpark unit tests)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Install the project and dev tools
         run: |
           python -m pip install --upgrade pip
@@ -44,4 +50,6 @@ jobs:
         run: ruff format --check .
 
       - name: Unit tests (pytest)
+        env:
+          REQUIRE_SPARK: "1" # fail, never skip, if the Spark tests cannot start
         run: pytest -v
