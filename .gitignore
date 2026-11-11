@@ -1,0 +1,43 @@
+# Secrets: never commit these
+.env
+*.env
+!.env.example
+.databrickscfg
+**/credentials
+*.pem
+airflow_settings.yaml
+
+# Local data and downloads (raw files live in S3 / the UC Volume, not git)
+data/
+*.txt.gz
+/raw/
+
+# Airflow local runtime
+infra/airflow/logs/
+infra/airflow/plugins/__pycache__/
+airflow.db
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Spark local
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Assistant tooling files (not part of the project)
+.claude/
+CLAUDE.md
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
