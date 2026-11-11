@@ -32,6 +32,10 @@ spark-warehouse/
 metastore_db/
 derby.log
 
+# Private study notes (learning guide, build log, decisions, glossary, progress).
+# Kept on disk, never pushed.
+docs/
+
 # Assistant tooling files (not part of the project)
 .claude/
 CLAUDE.md
