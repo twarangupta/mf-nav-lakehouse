@@ -45,7 +45,7 @@ Planned daily DAG: `check_source >> download_nav >> upload_raw >> trigger_databr
 
 ## Tech stack
 
-PySpark, Databricks (Free Edition, serverless), Delta Lake, Apache Airflow in Docker (3.x and LocalExecutor + Postgres planned), AWS S3 and IAM, Python 3.11, pytest, ruff, GitHub Actions.
+PySpark, Databricks (Free Edition, serverless), Delta Lake, Apache Airflow 3.x in Docker (LocalExecutor + Postgres), AWS S3 and IAM, Python 3.11, pytest, ruff, GitHub Actions.
 
 ## Repo layout
 
