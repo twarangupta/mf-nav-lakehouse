@@ -8,7 +8,7 @@ Run on Databricks (serverless) as a Python script task:
 
     bronze_nav.py --source-path s3://<bucket>/raw/nav/date=2026-11-11/ --run-id manual-1
 
-Rerunning the same file adds nothing: a file whose (source_file, file_sha256) is
+Rerunning the same file adds nothing: a file whose (nav_file_date, file_sha256) is
 already in the table is skipped, so the job is idempotent.
 """
 
@@ -93,9 +93,14 @@ def explode_lines(files: DataFrame, run_id: str) -> DataFrame:
 
 
 def only_new_files(lines: DataFrame, existing: DataFrame) -> DataFrame:
-    """Drop lines of files that are already loaded (same path and same content hash)."""
-    loaded = existing.select("source_file", "file_sha256").distinct()
-    return lines.join(loaded, on=["source_file", "file_sha256"], how="left_anti")
+    """Drop lines of files already loaded: same load date and same content hash.
+
+    Keyed on content, not on the path, so the same day's bytes landed in two places
+    (the Volume and S3) are loaded once. A changed file for the same date has a new
+    hash and is loaded again as a new version.
+    """
+    loaded = existing.select("nav_file_date", "file_sha256").distinct()
+    return lines.join(loaded, on=["nav_file_date", "file_sha256"], how="left_anti")
 
 
 ALLOWED_PREFIXES = ("s3://", "/Volumes/", "dbfs:/Volumes/")

@@ -61,6 +61,20 @@ def test_changed_file_at_same_path_is_loaded_again(spark):
     assert only_new_files(new, old).count() == 7
 
 
+def test_same_bytes_from_another_landing_path_same_date_is_skipped(spark):
+    from_volume = explode_lines(
+        _files(spark, path="/Volumes/mf_nav/raw/landing/nav/date=2026-11-11/NAVAll.txt"), "r1"
+    )
+    from_s3 = explode_lines(_files(spark), "r2")  # s3://.../date=2026-11-11/, same bytes
+    assert only_new_files(from_s3, from_volume).count() == 0
+
+
+def test_same_bytes_on_a_different_date_is_loaded(spark):
+    day1 = explode_lines(_files(spark), "r1")
+    day2 = explode_lines(_files(spark, path="s3://b/raw/nav/date=2026-11-12/NAVAll.txt"), "r2")
+    assert only_new_files(day2, day1).count() == 6
+
+
 def test_source_path_guard_rejects_windows_rewritten_path():
     import pytest
 
