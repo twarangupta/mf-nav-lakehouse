@@ -55,6 +55,14 @@ def validate_nav_bytes(content: bytes) -> None:
         raise InvalidNavFile(f"unexpected first bytes: {content[:40]!r}")
     if b";" not in content[len(EXPECTED_HEADER) :]:
         raise InvalidNavFile("no semicolon-separated data rows found")
+    # AMFI sends UTF-8 (curly apostrophes are E2 80 99). If that ever changes, for
+    # example to Windows-1252, fail loudly here instead of storing unreadable text.
+    try:
+        content.decode("utf-8")
+    except UnicodeDecodeError as err:
+        raise InvalidNavFile(
+            f"not valid UTF-8 at byte {err.start}: {content[err.start : err.start + 4]!r}"
+        ) from err
 
 
 def sha256_hex(content: bytes) -> str:

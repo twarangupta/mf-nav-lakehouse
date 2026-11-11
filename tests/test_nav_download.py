@@ -98,3 +98,13 @@ def test_land_daily_nav_saves_bytes_unchanged(monkeypatch):
     assert result.key == "raw/nav/date=2026-11-11/NAVAll.txt"
     assert result.sha256 == nd.sha256_hex(REAL_LOOKING)
     assert result.uploaded is True
+
+
+def test_validate_rejects_non_utf8_bytes():
+    cp1252_apostrophe = HEADER + b"Open Ended Schemes(Children\x92s Fund)\r\n" + ROW * 6000
+    with pytest.raises(nd.InvalidNavFile, match="not valid UTF-8"):
+        nd.validate_nav_bytes(cp1252_apostrophe)
+
+
+def test_validate_accepts_utf8_curly_apostrophe():
+    nd.validate_nav_bytes(HEADER + "Children’s Fund\r\n".encode() + ROW * 6000)
