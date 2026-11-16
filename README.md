@@ -56,6 +56,13 @@ Planned daily DAG: `check_source >> download_nav >> upload_raw >> trigger_databr
 | Bronze total | 12,529,520 lines from 309 files; no missing or duplicate line numbers |
 | Unit tests | 37, on a local SparkSession (Java 17) |
 
+## Roadmap
+
+1. Silver: parse, conform, deduplicate with MERGE, two-level data-quality gate.
+2. Gold: latest NAV, rolling and 1Y/3Y/5Y CAGR, volatility, drawdown, category ranks (Growth plans only).
+3. Dashboards: a Databricks SQL dashboard on Gold (screenshots in this README), and small Gold summary exports in `exports/gold/` (Parquet plus a manifest of row counts and export time) that feed a permanent public Streamlit dashboard in a separate repo. No credentials in the public app. Data: AMFI.
+4. Performance benchmarks, Airflow orchestration, interview pack.
+
 ## Tech stack
 
 PySpark, Databricks (Free Edition, serverless), Delta Lake, Apache Airflow 3.x in Docker (LocalExecutor + Postgres), AWS S3 and IAM, Python 3.11, pytest, ruff, GitHub Actions.
