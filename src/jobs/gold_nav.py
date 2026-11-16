@@ -127,7 +127,7 @@ def category_group(category: F.Column) -> F.Column:
     parts = F.split(category, r"\s+-\s+", 2)
     prefix = F.lower(F.try_element_at(parts, F.lit(1)))
     asset = (
-        F.when(prefix.startswith("equity"), "Equity")
+        F.when(prefix.startswith("equity") | prefix.startswith("elss"), "Equity")
         .when(prefix.rlike("debt|income"), "Debt")
         .when(prefix.startswith("hybrid"), "Hybrid")
         .when(prefix.startswith("solution"), "Solution Oriented")
@@ -142,11 +142,18 @@ def category_group(category: F.Column) -> F.Column:
     low = F.lower(sub)
     sub = (
         F.when(low.rlike(r"^thematic$"), "Sectoral/Thematic")
+        .when(low.startswith("elss"), "ELSS")
+        .when(low.startswith("banking and psu"), "Banking and PSU")
         .when(low.contains("fund of funds") & low.contains("domestic"), "FoF Domestic")
         .when(low.contains("fund of funds") & low.contains("overseas"), "FoF Overseas")
         .otherwise(sub)
     )
-    return F.concat_ws(" - ", asset, F.initcap(sub))
+    # initcap lowercases acronyms ("ELSS" -> "Elss"); put the common ones back.
+    nice = F.initcap(sub)
+    for word, fixed in (("Elss", "ELSS"), ("Fof", "FoF"), ("Etfs?", "ETF"), ("Psu", "PSU")):
+        nice = F.regexp_replace(nice, "(^|[^A-Za-z])" + word + "($|[^A-Za-z])", "$1" + fixed + "$2")
+    nice = F.regexp_replace(nice, "Sectoral/thematic", "Sectoral/Thematic")
+    return F.concat_ws(" - ", asset, nice)
 
 
 def growth_series(spark: SparkSession) -> DataFrame:

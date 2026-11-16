@@ -149,15 +149,18 @@ def test_rolling_return_and_month_end(spark):
         ("Equity Schemes - Large Cap Fund", "Equity - Large Cap"),
         ("Debt Scheme - Liquid Fund", "Debt - Liquid"),
         ("Income/Debt Oriented Schemes - Liquid Fund", "Debt - Liquid"),
-        ("Equity Scheme - Sectoral/ Thematic", "Equity - Sectoral/thematic"),
+        ("Equity Scheme - Sectoral/ Thematic", "Equity - Sectoral/Thematic"),
         ("Other Scheme - Index Funds", "Other - Index"),
-        ("ELSS", "Other - Elss"),
-        ("Equity Schemes - Thematic Fund", "Equity - Sectoral/thematic"),
+        ("Debt Scheme - Banking and PSU Fund", "Debt - Banking And PSU"),
+        ("Income/Debt Oriented Schemes - Banking and PSU Debt Fund", "Debt - Banking And PSU"),
+        ("ELSS", "Equity - ELSS"),
+        ("Equity Scheme - ELSS- Tax Saver", "Equity - ELSS"),
+        ("Equity Schemes - Thematic Fund", "Equity - Sectoral/Thematic"),
         (
             "Fund of Funds Scheme (Domestic) - Fund of Funds Scheme (Domestic)",
-            "Other - Fof Domestic",
+            "Other - FoF Domestic",
         ),
-        ("Other Scheme - FoF Domestic", "Other - Fof Domestic"),
+        ("Other Scheme - FoF Domestic", "Other - FoF Domestic"),
     ],
 )
 def test_category_group_merges_amfi_spellings(spark, category, group):
