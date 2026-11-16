@@ -28,11 +28,16 @@ def spark():
 
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
     os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
+    # Bind to loopback. On a laptop with Hyper-V/WSL network adapters, Spark picked a
+    # host name like "<pc>.mshome.net" and Python workers sometimes "failed to connect back".
+    os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")
     from pyspark.sql import SparkSession
 
     session = (
         SparkSession.builder.master("local[1]")
         .appName("mf-nav-tests")
+        .config("spark.driver.host", "127.0.0.1")
+        .config("spark.driver.bindAddress", "127.0.0.1")
         .config("spark.ui.enabled", "false")
         .config("spark.sql.shuffle.partitions", "1")
         .config("spark.sql.session.timeZone", "UTC")
