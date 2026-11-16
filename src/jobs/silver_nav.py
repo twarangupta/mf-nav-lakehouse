@@ -116,11 +116,11 @@ def _layout_column() -> F.Column:
 
 def _field(name: str) -> F.Column:
     """Pick a field by name, using the position for this row's layout."""
-    parts = F.col("_f")
     expr = F.lit(None).cast("string")
     for layout_name, layout in LAYOUTS.items():
         expr = F.when(
-            F.col("layout") == layout_name, F.trim(parts[layout["fields"][name]])
+            F.col("layout") == layout_name,
+            F.trim(F.expr(f"try_element_at(_f, {layout['fields'][name] + 1})")),
         ).otherwise(expr)
     return expr
 
@@ -183,11 +183,13 @@ def parse_rows(with_headers: DataFrame) -> DataFrame:
         F.when(F.col("source_file").contains("/nav_history/"), "history")
         .otherwise("daily")
         .alias("source_kind"),
-        F.expr("try_cast(trim(_f[0]) AS INT)").alias("scheme_code"),
+        F.expr("try_cast(trim(try_element_at(_f, 1)) AS INT)").alias("scheme_code"),
         name.alias("scheme_name"),
-        F.expr("to_date(try_to_timestamp(trim(_f[7]), 'dd-MMM-yyyy'))").alias("nav_date"),
-        F.trim(F.col("_f")[6]).alias("nav_raw"),
-        F.expr("try_cast(trim(_f[6]) AS DECIMAL(20,6))").alias("nav"),
+        F.expr("to_date(try_to_timestamp(trim(try_element_at(_f, 8)), 'dd-MMM-yyyy'))").alias(
+            "nav_date"
+        ),
+        F.trim(F.expr("try_element_at(_f, 7)")).alias("nav_raw"),
+        F.expr("try_cast(trim(try_element_at(_f, 7)) AS DECIMAL(20,6))").alias("nav"),
         clean_text(_field("isin_1")).alias("isin_growth_or_payout"),
         clean_text(_field("isin_2")).alias("isin_reinvestment"),
         plan_raw.alias("plan_raw"),

@@ -211,3 +211,14 @@ def test_option_rules(spark, option_raw, name, expected):
 def test_plan_rules(spark, plan_raw, name, expected):
     df = spark.createDataFrame([(plan_raw, name)], "p string, n string")
     assert df.select(sv.derive_plan(df.p, df.n).alias("x")).first().x == expected
+
+
+def test_short_line_is_quarantined_not_a_crash_in_ansi_mode(spark):
+    lines = HIST_LINES[:6] + ["120465;Short line;Direct Plan;10.0000;03-Nov-2025"]
+    spark.conf.set("spark.sql.ansi.enabled", "true")  # serverless runs ANSI mode
+    try:
+        checked = sv.quality_reason(_parsed(_bronze(spark, HIST, lines, date(2025, 11, 3))))
+        reasons = [r.dq_reason for r in checked.collect()]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", "false")
+    assert reasons == ["bad_field_count"]
