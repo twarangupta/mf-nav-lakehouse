@@ -22,6 +22,7 @@ already in the table is skipped, so the job is idempotent.
 from __future__ import annotations
 
 import argparse
+import re
 from urllib.parse import urlparse
 
 from pyspark.sql import DataFrame, SparkSession
@@ -33,6 +34,7 @@ SECRET_KEY_ID = "s3_reader_access_key_id"
 SECRET_KEY_SECRET = "s3_reader_secret_access_key"  # noqa: S105 (a key name, not a secret)
 DEFAULT_AWS_REGION = "ap-southeast-2"
 FILES_SCHEMA = "path string, content binary"
+DEFAULT_BATCH_FILES = 8  # about 50 MB of history per Delta commit
 
 BRONZE_DDL = f"""
 CREATE TABLE IF NOT EXISTS {BRONZE_TABLE} (
@@ -57,23 +59,58 @@ def split_s3_uri(uri: str) -> tuple[str, str]:
     return parsed.netloc, parsed.path.lstrip("/")
 
 
+def list_s3_txt(s3, bucket: str, prefix: str) -> list[str]:
+    """All .txt keys under a prefix, sorted (so loads happen in date order)."""
+    keys = []
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        keys += [o["Key"] for o in page.get("Contents", []) if o["Key"].endswith(".txt")]
+    return sorted(keys)
+
+
+def key_date(key: str) -> str:
+    """'raw/nav/date=2026-11-12/NAVAll.txt' -> '2026-11-12' ('' if no date folder)."""
+    match = re.search(r"date=(\d{4}-\d{2}-\d{2})", key)
+    return match.group(1) if match else ""
+
+
+def pending_s3_keys(s3, bucket: str, keys: list[str], loaded: set[tuple[str, str]]) -> list[str]:
+    """Keys whose (date, SHA-256 from S3 metadata) is not in Bronze yet.
+
+    Uses head_object (metadata only), so already-loaded files are never downloaded.
+    A file without a sha256 in its metadata is kept; the anti join still guards it.
+    """
+    todo = []
+    for key in keys:
+        sha = s3.head_object(Bucket=bucket, Key=key).get("Metadata", {}).get("sha256")
+        if not sha or (key_date(key), sha) not in loaded:
+            todo.append(key)
+    return todo
+
+
+def download_s3_files(spark: SparkSession, s3, bucket: str, keys: list[str]) -> DataFrame:
+    """Download the given keys with boto3 (on the driver): one row per file, exact bytes."""
+    rows = [
+        (f"s3://{bucket}/{key}", bytearray(s3.get_object(Bucket=bucket, Key=key)["Body"].read()))
+        for key in keys
+    ]
+    return spark.createDataFrame(rows, FILES_SCHEMA)
+
+
 def read_s3_files(spark: SparkSession, source_path: str, s3) -> DataFrame:
     """Download every .txt object under an s3:// prefix with boto3 (on the driver).
 
     Returns the same shape as read_raw_files: one row per file, `path` and exact
-    `content` bytes. Daily files are 1.5 MB and history chunks about 5 MB, so pulling
-    them through the driver is fine. `s3` is a boto3 S3 client (a fake in tests).
+    `content` bytes. `s3` is a boto3 S3 client (a fake in tests).
     """
     bucket, prefix = split_s3_uri(source_path)
-    rows = []
-    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            if obj["Key"].endswith(".txt"):
-                body = s3.get_object(Bucket=bucket, Key=obj["Key"])["Body"].read()
-                rows.append((f"s3://{bucket}/{obj['Key']}", bytearray(body)))
-    if not rows:
+    keys = list_s3_txt(s3, bucket, prefix)
+    if not keys:
         raise FileNotFoundError(f"no .txt files under {source_path}")
-    return spark.createDataFrame(rows, FILES_SCHEMA)
+    return download_s3_files(spark, s3, bucket, keys)
+
+
+def batches(items: list, size: int) -> list[list]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
 
 
 def s3_client_from_secrets(region: str = DEFAULT_AWS_REGION):
@@ -183,28 +220,56 @@ def run(
     table: str = BRONZE_TABLE,
     s3=None,
     aws_region: str = DEFAULT_AWS_REGION,
+    batch_files: int = DEFAULT_BATCH_FILES,
 ) -> int:
-    """Load all raw files under source_path into Bronze. Returns rows appended."""
+    """Load all raw files under source_path into Bronze. Returns rows appended.
+
+    For s3:// prefixes with many files (the history backfill has about 300), files
+    already loaded are skipped using their S3 metadata hash, and the rest are loaded
+    `batch_files` at a time, one Delta commit per batch. A stopped run is resumed by
+    running it again.
+    """
     check_source_path(source_path)
     spark.sql("CREATE SCHEMA IF NOT EXISTS mf_nav.bronze")
     spark.sql(BRONZE_DDL.replace(BRONZE_TABLE, table))
-    if source_path.startswith("s3://"):
-        files = read_s3_files(spark, source_path, s3 or s3_client_from_secrets(aws_region))
-    else:
-        files = read_raw_files(spark, source_path)
-    lines = explode_lines(files, run_id)
-    new_lines = only_new_files(lines, spark.table(table))
+    if not source_path.startswith("s3://"):
+        return _append_new(spark, read_raw_files(spark, source_path), run_id, table, source_path)
+
+    s3 = s3 or s3_client_from_secrets(aws_region)
+    bucket, prefix = split_s3_uri(source_path)
+    keys = list_s3_txt(s3, bucket, prefix)
+    if not keys:
+        raise FileNotFoundError(f"no .txt files under {source_path}")
+    loaded = {
+        (str(r["nav_file_date"]), r["file_sha256"])
+        for r in spark.table(table).select("nav_file_date", "file_sha256").distinct().collect()
+    }
+    todo = pending_s3_keys(s3, bucket, keys, loaded)
+    print(f"bronze: {len(keys)} files under {source_path}, {len(keys) - len(todo)} already loaded")
+    total = 0
+    for i, batch in enumerate(batches(todo, batch_files), start=1):
+        files = download_s3_files(spark, s3, bucket, batch)
+        label = f"{source_path} batch {i} ({key_date(batch[0])} to {key_date(batch[-1])})"
+        total += _append_new(spark, files, run_id, table, label)
+    print(f"bronze: done, appended {total} rows from {len(todo)} files (run_id={run_id})")
+    return total
+
+
+def _append_new(spark: SparkSession, files: DataFrame, run_id: str, table: str, label: str) -> int:
+    """Explode files into lines, drop already-loaded files, append. Returns rows appended."""
+    new_lines = only_new_files(explode_lines(files, run_id), spark.table(table))
     # No df.cache() here: serverless rejects it on older client environments. Instead,
     # isEmpty() is a cheap check, and the row count comes from the Delta commit itself.
     if new_lines.isEmpty():
-        print(f"bronze: nothing new under {source_path}; already loaded (run_id={run_id})")
+        print(f"bronze: nothing new in {label}; already loaded (run_id={run_id})")
         return 0
     new_lines.write.format("delta").mode("append").saveAsTable(table)
     last_commit = spark.sql(f"DESCRIBE HISTORY {table} LIMIT 1").first()
     appended = int(last_commit["operationMetrics"]["numOutputRows"])
     print(
-        f"bronze: appended {appended} rows from {source_path} "
-        f"(run_id={run_id}, table version {last_commit['version']})"
+        f"bronze: appended {appended} rows from {label} "
+        f"(run_id={run_id}, table version {last_commit['version']})",
+        flush=True,
     )
     return appended
 
@@ -215,9 +280,17 @@ def main() -> None:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--table", default=BRONZE_TABLE)
     parser.add_argument("--aws-region", default=DEFAULT_AWS_REGION)
+    parser.add_argument("--batch-files", type=int, default=DEFAULT_BATCH_FILES)
     args = parser.parse_args()
     spark = SparkSession.builder.getOrCreate()
-    run(spark, args.source_path, args.run_id, args.table, aws_region=args.aws_region)
+    run(
+        spark,
+        args.source_path,
+        args.run_id,
+        args.table,
+        aws_region=args.aws_region,
+        batch_files=args.batch_files,
+    )
 
 
 if __name__ == "__main__":

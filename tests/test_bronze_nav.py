@@ -150,3 +150,46 @@ def test_read_s3_files_fails_loudly_when_prefix_is_empty(spark):
 
     with pytest.raises(FileNotFoundError):
         read_s3_files(spark, "s3://bucket/raw/nav/date=2030-01-01/", FakeS3Reader({}))
+
+
+class FakeS3WithMetadata(FakeS3Reader):
+    """FakeS3Reader plus head_object returning the sha256 metadata the uploaders write."""
+
+    def __init__(self, objects, shas):
+        super().__init__(objects)
+        self.shas = shas  # {key: sha256}
+        self.heads = []
+
+    def head_object(self, Bucket, Key):  # noqa: N803
+        self.heads.append(Key)
+        return {"Metadata": {"sha256": self.shas[Key]} if Key in self.shas else {}}
+
+
+def test_key_date_and_batches():
+    from src.jobs.bronze_nav import batches, key_date
+
+    assert key_date("raw/nav_history/date=2021-01-01/NAVHistory_2021-01-01_2021-01-07.txt") == (
+        "2021-01-01"
+    )
+    assert key_date("raw/other/file.txt") == ""
+    assert batches([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]
+
+
+def test_pending_keys_skip_loaded_files_without_downloading_them():
+    from src.jobs.bronze_nav import pending_s3_keys
+
+    k1 = "raw/nav_history/date=2021-01-01/NAVHistory_2021-01-01_2021-01-07.txt"
+    k2 = "raw/nav_history/date=2021-01-08/NAVHistory_2021-01-08_2021-01-14.txt"
+    k3 = "raw/nav_history/date=2021-01-15/NAVHistory_2021-01-15_2021-01-21.txt"
+    fake = FakeS3WithMetadata({k1: b"", k2: b"", k3: b""}, {k1: "aaa", k2: "bbb"})
+    loaded = {("2021-01-01", "aaa"), ("2021-01-08", "old-version-hash")}
+    todo = pending_s3_keys(fake, "b", [k1, k2, k3], loaded)
+    assert todo == [k2, k3]  # k2 changed since loaded; k3 has no hash metadata
+    assert fake.got == []  # nothing was downloaded to decide this
+
+
+def test_list_s3_txt_is_sorted_and_txt_only():
+    from src.jobs.bronze_nav import list_s3_txt
+
+    fake = FakeS3Reader({"p/date=2/b.txt": b"", "p/date=1/a.txt": b"", "p/x.csv": b""})
+    assert list_s3_txt(fake, "b", "p/") == ["p/date=1/a.txt", "p/date=2/b.txt"]
