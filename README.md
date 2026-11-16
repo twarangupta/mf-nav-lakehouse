@@ -4,7 +4,7 @@
 
 A daily batch pipeline that collects Net Asset Value (NAV) data for every Indian mutual fund scheme from AMFI, stores it in a Delta Lake lakehouse on Databricks using the Medallion architecture (Bronze, Silver, Gold), computes fund analytics (rolling returns, CAGR, volatility, drawdown) and is orchestrated end to end by Apache Airflow.
 
-**Status:** Phase 1 (ingest to Bronze) complete: daily NAV files land in S3 and load into a Bronze Delta table on Databricks. Backfill, Silver, Gold, the dashboard, performance and orchestration come next. Real numbers are added below as they are measured.
+**Status:** Phases 1 and 2 complete: daily NAV files and almost 6 years of history (2021-01-01 onwards) land in S3 and load into a Bronze Delta table on Databricks. Silver, Gold, the dashboard, performance and orchestration come next. Real numbers are added below as they are measured.
 
 ## Architecture
 
@@ -27,6 +27,7 @@ Planned daily DAG: `check_source >> download_nav >> upload_raw >> trigger_databr
 
 - **Airflow downloads, Databricks processes.** Databricks Free Edition serverless restricts outbound internet, so the orchestrator lands each raw file and Spark only reads landed files. A raw copy is kept for replays.
 - **S3 is the single raw landing zone.** Each daily file is saved byte for byte to `s3://<bucket>/raw/nav/date=YYYY-MM-DD/NAVAll.txt`. The Bronze job reads it with boto3 using a read-only IAM user key kept in a Databricks secret scope (never in code). The recommended Unity Catalog route (storage credential + IAM role with an external ID) was built but is refused on this setup: the Free Edition workspace runs in us-east-2, the AWS free-plan account is locked to ap-southeast-2, and the AWS free plan does not support cross-region features. Details: [infra/aws/README.md](infra/aws/README.md).
+- **Backfill in polite, restartable chunks.** History is fetched one 7-day range at a time, sequentially, with a pause and retries after 5, 15 and 45 s. A chunk already in S3 is skipped, and Bronze skips files whose hash it already has, so either step can be stopped and rerun safely.
 - **Bronze keeps every raw line, in order.** One row per line (data rows, category and fund house headers, blank lines) with its line number, because an AMFI header line applies to the rows below it. Reruns add nothing: a file already loaded for the same date with the same SHA-256 is skipped.
 - **Least privilege, two separate keys.** The uploader ([policy](infra/aws/iam_policy_airflow_uploader.json)) can list, read and write under `raw/` but cannot delete. The Databricks reader ([policy](infra/aws/iam_policy_databricks_read.json)) can only list and read. If either key leaks, only that one is revoked.
 - **Returns use Growth plans only.** IDCW (dividend) NAVs drop on every payout, so they are not total-return series. CAGR, rolling returns and volatility use Growth option plans only. IDCW rows stay in Silver because their latest NAV is still valid.
@@ -50,7 +51,10 @@ Planned daily DAG: `check_source >> download_nav >> upload_raw >> trigger_databr
 | Bronze table | `mf_nav.bronze.nav_raw_lines` |
 | Daily file loaded (2026-11-12, read from S3) | 18,251 rows in a 26 s serverless run |
 | Rerun of the same file | 0 rows added (idempotent) |
-| Unit tests | 27, on a local SparkSession (Java 17) |
+| History backfill to S3 (2021-01-01 to 2026-11-15) | 307 weekly files, 1.58 GB, 11,816,895 price rows, 73.4 min, 0 failures |
+| History load into Bronze | 12,443,113 lines from 306 files in 658 s (39 batches); rerun adds 0 rows |
+| Bronze total | 12,529,520 lines from 309 files; no missing or duplicate line numbers |
+| Unit tests | 37, on a local SparkSession (Java 17) |
 
 ## Tech stack
 
@@ -60,7 +64,7 @@ PySpark, Databricks (Free Edition, serverless), Delta Lake, Apache Airflow 3.x i
 
 ```
 dags/          Airflow DAGs
-src/ingest/    downloader: AMFI NAVAll.txt to S3, byte for byte
+src/ingest/    downloaders: daily NAVAll.txt and the history backfill, to S3 byte for byte
 src/jobs/      PySpark jobs run on Databricks (bronze, silver, gold)
 scripts/       run a job on Databricks serverless; load the S3 reader key into Databricks secrets
 tests/         pytest unit tests (DAG integrity and PySpark tests added as code lands)
@@ -85,6 +89,7 @@ The Spark tests need Java 17 (`JAVA_HOME`); without it they are skipped locally.
 
 ```bash
 python -m src.ingest.nav_download                     # land today's file in S3
+python -m src.ingest.nav_history --start 2021-01-01 --end 2026-11-15   # one-off history backfill
 python scripts/run_on_databricks.py src/jobs/bronze_nav.py     --source-path s3://<bucket>/raw/nav/date=YYYY-MM-DD/ --run-id manual-1
 ```
 
