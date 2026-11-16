@@ -4,7 +4,7 @@
 
 A daily batch pipeline that collects Net Asset Value (NAV) data for every Indian mutual fund scheme from AMFI, stores it in a Delta Lake lakehouse on Databricks using the Medallion architecture (Bronze, Silver, Gold), computes fund analytics (rolling returns, CAGR, volatility, drawdown) and is orchestrated end to end by Apache Airflow.
 
-**Status:** Phases 1 and 2 complete: daily NAV files and almost 6 years of history (2021-01-01 onwards) land in S3 and load into a Bronze Delta table on Databricks. Silver, Gold, the dashboard, performance and orchestration come next. Real numbers are added below as they are measured.
+**Status:** Phases 1 to 3 complete: daily NAV files and almost 6 years of history land in S3, load into a Bronze Delta table, and are parsed into a clean, deduplicated Silver table behind a data-quality gate. Gold, the dashboards, performance and orchestration come next. Real numbers are added below as they are measured.
 
 ## Architecture
 
@@ -30,6 +30,7 @@ Planned daily DAG: `check_source >> download_nav >> upload_raw >> trigger_databr
 - **Backfill in polite, restartable chunks.** History is fetched one 7-day range at a time, sequentially, with a pause and retries after 5, 15 and 45 s. A chunk already in S3 is skipped, and Bronze skips files whose hash it already has, so either step can be stopped and rerun safely.
 - **Bronze keeps every raw line, in order.** One row per line (data rows, category and fund house headers, blank lines) with its line number, because an AMFI header line applies to the rows below it. Reruns add nothing: a file already loaded for the same date with the same SHA-256 is skipped.
 - **Least privilege, two separate keys.** The uploader ([policy](infra/aws/iam_policy_airflow_uploader.json)) can list, read and write under `raw/` but cannot delete. The Databricks reader ([policy](infra/aws/iam_policy_databricks_read.json)) can only list and read. If either key leaks, only that one is revoked.
+- **Silver: parse, check, gate, MERGE.** Each data line inherits the category and fund house from the AMFI header lines above it (a window ordered by line number), is parsed by its file's own column layout (the daily file and the history report differ), and gets plan (Direct/Regular) and option (Growth/IDCW/Bonus) from simple, tested rules. Rows that break a hard rule go to `silver.nav_quarantine` with a reason; a file with more than 1% bad rows, or an unknown header, is rejected as a whole and the job fails, so Gold never sees it. Good rows are MERGEd on (scheme_code, nav_date), so reruns never double count. Big day-over-day moves on Growth plans are flagged in `silver.dq_warnings`, not removed.
 - **Returns use Growth plans only.** IDCW (dividend) NAVs drop on every payout, so they are not total-return series. CAGR, rolling returns and volatility use Growth option plans only. IDCW rows stay in Silver because their latest NAV is still valid.
 - **Category comes from AMFI.** Category and fund house are taken from the header lines of the latest daily NAVAll.txt; history is used for NAV values only.
 - **Why Spark at this size.** About 14M rows and 2 GB of raw text would fit on one machine (DuckDB or Polars would handle it). Spark is used because Databricks and Delta Lake are Spark-native and the same code runs unchanged at 100x the volume.
@@ -54,14 +55,18 @@ Planned daily DAG: `check_source >> download_nav >> upload_raw >> trigger_databr
 | History backfill to S3 (2021-01-01 to 2026-11-15) | 307 weekly files, 1.58 GB, 11,816,895 price rows, 73.4 min, 0 failures |
 | History load into Bronze | 12,443,113 lines from 306 files in 658 s (39 batches); rerun adds 0 rows |
 | Bronze total | 12,529,520 lines from 309 files; no missing or duplicate line numbers |
-| Unit tests | 37, on a local SparkSession (Java 17) |
+| Silver `mf_nav.silver.nav` | 11,653,085 NAV records, one per scheme per day (17,261 schemes), every row with an AMFI category and fund house |
+| Rows quarantined with a reason | 167,407 (159,416 expected zero NAVs of segregated portfolios, 7,978 other non-positive NAVs, 13 "N.A.") |
+| Quality gate | 309 files checked, 0 rejected; worst file 0.26% bad (threshold 1%) |
+| Silver full rebuild from Bronze | 120 s on serverless; rerun with no new files 17 s |
+| Recovery drill | a deliberately corrupted day (8,716 rows) found with Delta time travel and restored with `RESTORE TABLE` |
+| Unit tests | 57, on a local SparkSession (Java 17) |
 
 ## Roadmap
 
-1. Silver: parse, conform, deduplicate with MERGE, two-level data-quality gate.
-2. Gold: latest NAV, rolling and 1Y/3Y/5Y CAGR, volatility, drawdown, category ranks (Growth plans only).
-3. Dashboards: a Databricks SQL dashboard on Gold (screenshots in this README), and small Gold summary exports in `exports/gold/` (Parquet plus a manifest of row counts and export time) that feed a permanent public Streamlit dashboard in a separate repo. No credentials in the public app. Data: AMFI.
-4. Performance benchmarks, Airflow orchestration, interview pack.
+1. Gold: latest NAV, rolling and 1Y/3Y/5Y CAGR, volatility, drawdown, category ranks (Growth plans only).
+2. Dashboards: a Databricks SQL dashboard on Gold (screenshots in this README), and small Gold summary exports in `exports/gold/` (Parquet plus a manifest of row counts and export time) that feed a permanent public Streamlit dashboard in a separate repo. No credentials in the public app. Data: AMFI.
+3. Performance benchmarks, Airflow orchestration, interview pack.
 
 ## Tech stack
 
@@ -72,7 +77,7 @@ PySpark, Databricks (Free Edition, serverless), Delta Lake, Apache Airflow 3.x i
 ```
 dags/          Airflow DAGs
 src/ingest/    downloaders: daily NAVAll.txt and the history backfill, to S3 byte for byte
-src/jobs/      PySpark jobs run on Databricks (bronze, silver, gold)
+src/jobs/      PySpark jobs run on Databricks: bronze_nav.py, silver_nav.py (gold next)
 scripts/       run a job on Databricks serverless; load the S3 reader key into Databricks secrets
 tests/         pytest unit tests (DAG integrity and PySpark tests added as code lands)
 .github/       CI workflow (ruff + pytest on every push and pull request)
@@ -97,6 +102,7 @@ The Spark tests need Java 17 (`JAVA_HOME`); without it they are skipped locally.
 ```bash
 python -m src.ingest.nav_download                     # land today's file in S3
 python -m src.ingest.nav_history --start 2021-01-01 --end 2026-11-15   # one-off history backfill
+python scripts/run_on_databricks.py src/jobs/silver_nav.py --run-id manual-1  # add --full-refresh to rebuild
 python scripts/run_on_databricks.py src/jobs/bronze_nav.py     --source-path s3://<bucket>/raw/nav/date=YYYY-MM-DD/ --run-id manual-1
 ```
 
