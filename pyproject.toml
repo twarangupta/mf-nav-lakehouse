@@ -22,6 +22,11 @@ dev = [
     "ruff>=0.17,<0.18",
 ]
 
+# Only for scripts/export_gold.py (writes Parquet from Arrow results). Not needed in CI.
+export = [
+    "pyarrow>=15",
+]
+
 [tool.setuptools.packages.find]
 # Only src/ is an installable package; dags/, tests/, docs/, infra/ are not.
 include = ["src*"]
