@@ -88,10 +88,24 @@ The screenshots were taken on 2026-11-20 just before two data-quality fixes foun
 
 [dashboards/streamlit/app.py](dashboards/streamlit/app.py) mirrors the Databricks dashboard (KPIs, top 10 by category and plan, rolling 1-year returns for chosen funds, risk vs return, drawdown by category, data quality) but reads only the small Gold exports committed in [exports/gold/](exports/gold/) (5 Parquet files and a manifest, 2.4 MB, data as of 2026-11-15). It needs no Databricks or AWS credentials, so it keeps working when the free workspace is asleep. Run it locally with `pip install -r dashboards/streamlit/requirements.txt` and `streamlit run dashboards/streamlit/app.py`. Data: AMFI.
 
+## Performance (measured, not assumed)
+
+`silver.nav` is 11,653,085 rows but only 127 MB in 30 files (about 62 MB once compacted), far below the roughly 1 TB where Databricks recommends partitioning. [scripts/benchmark_layouts.py](scripts/benchmark_layouts.py) copies it into six layouts and runs three fixed queries on each, three times, on the 2X-Small serverless SQL warehouse, with the result cache bypassed (checked: 0 of 18 measured rows came from cache). Medians, full table in [benchmarks/layout_results.csv](benchmarks/layout_results.csv):
+
+| Layout | Files | One fund's history: MB read / ms | One category, one year: MB read / ms | Full scan: MB read / ms |
+|---|---|---|---|---|
+| As left by MERGE | 30 | 70.7 / 550 | 70.9 / 607 | 68.2 / 431 |
+| OPTIMIZE (compaction) | 2 | 62.2 / 637 | 62.4 / 658 | 60.8 / 523 |
+| Partitioned by year | 15 | 64.8 / 497 | **11.8** / 592 | 59.9 / 448 |
+| OPTIMIZE + ZORDER BY scheme_code | 1 | 62.0 / 775 | 62.2 / 738 | 60.5 / 611 |
+| Liquid clustering (scheme_code, nav_date) | 2 | 63.8 / 615 | 64.0 / 654 | 62.4 / 503 |
+
+What it shows: at this size every query finishes in 0.4 to 0.8 s whatever the layout, and the differences are within run-to-run noise. Only year partitioning skips data (14 of 15 files skipped, 82% fewer bytes for the year-filtered query), and it does not make that query meaningfully faster. Z-ORDER and liquid clustering cannot skip files when the whole table fits in one or two files. The join with the 202 KB scheme dimension is already a broadcast join chosen automatically (`PhotonBroadcastHashJoin`); an explicit `BROADCAST` hint produces the same plan. So `silver.nav` keeps its simple layout and relies on Databricks' automatic optimization; clustering on (scheme_code, nav_date) is the first change to make if the table grows by orders of magnitude.
+
 ## Roadmap
 
 1. Deploy the Streamlit app on Streamlit Community Cloud and link it here.
-2. Performance benchmarks, Airflow orchestration, interview pack.
+2. Airflow orchestration, interview pack.
 
 ## Tech stack
 
