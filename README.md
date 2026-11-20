@@ -4,7 +4,7 @@
 
 A daily batch pipeline that collects Net Asset Value (NAV) data for every Indian mutual fund scheme from AMFI, stores it in a Delta Lake lakehouse on Databricks using the Medallion architecture (Bronze, Silver, Gold), and computes fund analytics (rolling returns, CAGR, volatility, drawdown). Each step is idempotent and run from the command line today; the daily orchestration is designed for Apache Airflow (see below).
 
-**Status:** Phases 1 to 4 and the Databricks dashboard complete: daily NAV files and almost 6 years of history land in S3, flow through Bronze and a quality-gated Silver table, and Gold computes returns, CAGR, volatility, drawdown and category ranks for every active Growth scheme. Dashboards, performance and orchestration come next. Real numbers are added below as they are measured.
+**Status:** complete. Daily NAV files and almost 6 years of history (2021-01-01 to 2026-11-15) land in S3, flow through Bronze, a quality-gated Silver table and Gold fund analytics on Databricks, and are shown on a Databricks dashboard and a public Streamlit app. Every number below was measured on the real data. Orchestration is designed for Airflow but not deployed (steps run from the command line).
 
 ## Architecture
 
@@ -46,7 +46,7 @@ Orchestration: the steps run today from the command line (`src/ingest/nav_downlo
 | AMFI history sample (5 days, Jan 2021) | 29,383 rows, about 9,200 per business day |
 | Estimated 5-year history | about 14M rows |
 
-## Results so far
+## Results
 
 | Measure | Value |
 |---|---|
@@ -55,7 +55,7 @@ Orchestration: the steps run today from the command line (`src/ingest/nav_downlo
 | Rerun of the same file | 0 rows added (idempotent) |
 | History backfill to S3 (2021-01-01 to 2026-11-15) | 307 weekly files, 1.58 GB, 11,816,895 price rows, 73.4 min, 0 failures |
 | History load into Bronze | 12,443,113 lines from 306 files in 658 s (39 batches); rerun adds 0 rows |
-| Bronze total | 12,529,520 lines from 309 files; no missing or duplicate line numbers |
+| Bronze total | 12,547,818 lines from 310 files (307 history weeks, 3 daily files); no missing or duplicate line numbers |
 | Silver `mf_nav.silver.nav` | 11,653,085 NAV records, one per scheme per day (17,261 schemes), every row with an AMFI category and fund house |
 | Rows quarantined with a reason | 167,407 (166,024 expected zero NAVs of segregated portfolios, 1,370 other non-positive NAVs, 13 "N.A.") |
 | Quality gate | 309 files checked, 0 rejected; worst file 0.26% bad (threshold 1%) |
@@ -64,7 +64,7 @@ Orchestration: the steps run today from the command line (`src/ingest/nav_downlo
 | Gold `mf_nav.gold.fund_metrics` (as of 2026-11-15) | 3,716 active Growth schemes; 2,509 with a 3Y CAGR, 1,809 with 5Y; medians: 1Y return 4.29%, 3Y CAGR 9.70%, volatility 13.79%, max drawdown -14.91% |
 | Gold build | 6 tables in 45 s on serverless; dashboard tables under 2 MB |
 | Spot-check | 1Y, 3Y, 5Y returns of 4 well-known funds recomputed independently in plain Python from mfapi.in: 0.00 basis points difference |
-| Unit tests | 92, on a local SparkSession (Java 17) |
+| Unit tests | 96 (Spark jobs on a local SparkSession with Java 17, downloaders, exports, the Streamlit app), all run in GitHub Actions on every push |
 
 ## Databricks dashboard
 
@@ -102,10 +102,22 @@ The screenshots were taken on 2026-11-20 just before two data-quality fixes foun
 
 What it shows: at this size every query finishes in 0.4 to 0.8 s whatever the layout, and the differences are within run-to-run noise. Only year partitioning skips data (14 of 15 files skipped, 82% fewer bytes for the year-filtered query), and it does not make that query meaningfully faster. Z-ORDER and liquid clustering cannot skip files when the whole table fits in one or two files. The join with the 202 KB scheme dimension is already a broadcast join chosen automatically (`PhotonBroadcastHashJoin`); an explicit `BROADCAST` hint produces the same plan. So `silver.nav` keeps its simple layout and relies on Databricks' automatic optimization; clustering on (scheme_code, nav_date) is the first change to make if the table grows by orders of magnitude.
 
+## What I would change at 100x scale
+
+At 100x (about 1.2 billion NAV rows, 13 GB in Silver, thousands of files) the design holds, but these parts would change:
+
+- **Reading S3**: replace the driver-side boto3 download with a Unity Catalog external location backed by an IAM role (no long-lived key), so executors read files in parallel; land files with Auto Loader in file-notification mode instead of listing prefixes.
+- **Table layout**: liquid clustering on `(scheme_code, nav_date)` for Silver, so one fund's history or one date range reads a few files; re-run `scripts/benchmark_layouts.py` to prove the gain before keeping it (at 127 MB it made no difference).
+- **Incremental processing**: Bronze idempotency with an insert-only MERGE (safe under concurrent runs); Gold computed only for changed schemes using Delta Change Data Feed instead of a full rebuild; rolling returns appended by date.
+- **Orchestration**: run the designed DAG on managed Airflow (MWAA or Astronomer) or Databricks Workflows deployed with Asset Bundles, with deadline alerts, a secrets backend and an on-call runbook.
+- **Environments and governance**: separate dev/staging/prod catalogs, jobs running as a service principal, Unity Catalog grants and row filters for consumers, infrastructure as code (Terraform).
+- **Data quality**: declarative expectations (Lakeflow pipelines) plus volume and freshness anomaly checks, alerting instead of a person reading a chart.
+- **Serving**: Gold served from a SQL warehouse to the BI tool with a shared metric definition; exports only for external sharing (Delta Sharing).
+
 ## Roadmap
 
 1. Deploy the Streamlit app on Streamlit Community Cloud and link it here.
-2. Run the designed Airflow DAG on an always-on host (for example a managed service) instead of command-line runs.
+2. Run the designed Airflow DAG on an always-on host instead of command-line runs.
 
 ## Tech stack
 
@@ -114,20 +126,26 @@ PySpark, Databricks (Free Edition, serverless), Delta Lake, AWS S3 and IAM, Stre
 ## Repo layout
 
 ```
-dags/          reserved for the Airflow DAG (designed, not deployed)
-src/ingest/    downloaders: daily NAVAll.txt and the history backfill, to S3 byte for byte
-src/jobs/      PySpark jobs run on Databricks: bronze_nav.py, silver_nav.py, gold_nav.py
-scripts/       run a job on Databricks serverless; load the S3 reader key into Databricks secrets
-tests/         pytest unit tests (DAG integrity and PySpark tests added as code lands)
-.github/       CI workflow (ruff + pytest on every push and pull request)
-infra/aws/     least-privilege IAM policies (uploader, Databricks reader) and role templates
+src/ingest/          downloaders: daily NAVAll.txt and the history backfill, to S3 byte for byte
+src/jobs/            PySpark jobs run on Databricks: bronze_nav.py, silver_nav.py, gold_nav.py
+scripts/             run a job on Databricks, run SQL checks, benchmark layouts, export Gold,
+                     load the S3 reader key into Databricks secrets
+dashboards/sql/      the six SQL queries behind the Databricks dashboard
+dashboards/streamlit/ the public Streamlit app (reads exports/gold only)
+exports/gold/        small Gold exports (Parquet + manifest) for the public app
+benchmarks/          measured layout benchmark results
+images/              dashboard screenshots
+tests/               96 pytest tests (local SparkSession for the Spark jobs)
+infra/aws/           least-privilege IAM policies and role templates
+dags/                reserved for the Airflow DAG (designed, not deployed)
+.github/             CI: ruff + pytest on every push to dev and main
 ```
 
 ## Run the checks locally
 
 ```bash
 uv venv --python 3.11 .venv
-uv pip install --python .venv/Scripts/python.exe -e ".[dev]"   # .venv/bin/python on Mac or Linux
+uv pip install --python .venv/Scripts/python.exe -e ".[dev,export,dashboard]"   # .venv/bin/python on Mac or Linux
 .venv/Scripts/ruff.exe check .
 .venv/Scripts/ruff.exe format --check .
 .venv/Scripts/python.exe -m pytest -v
@@ -138,16 +156,18 @@ The Spark tests need Java 17 (`JAVA_HOME`); without it they are skipped locally.
 ## Run it by hand
 
 ```bash
-python -m src.ingest.nav_download                     # land today's file in S3
-python -m src.ingest.nav_history --start 2021-01-01 --end 2026-11-15   # one-off history backfill
-python scripts/run_on_databricks.py src/jobs/silver_nav.py --run-id manual-1  # add --full-refresh to rebuild
+python -m src.ingest.nav_download                                       # land today's file in S3
+python -m src.ingest.nav_history --start 2021-01-01 --end 2026-11-15    # one-off history backfill
+python scripts/run_on_databricks.py src/jobs/bronze_nav.py --source-path s3://<bucket>/raw/nav/date=YYYY-MM-DD/ --run-id manual-1
+python scripts/run_on_databricks.py src/jobs/silver_nav.py --run-id manual-1   # add --full-refresh to rebuild
 python scripts/run_on_databricks.py src/jobs/gold_nav.py --run-id manual-1
-python scripts/run_on_databricks.py src/jobs/bronze_nav.py     --source-path s3://<bucket>/raw/nav/date=YYYY-MM-DD/ --run-id manual-1
+python scripts/export_gold.py                                           # refresh exports/gold
+streamlit run dashboards/streamlit/app.py
 ```
 
-Both read settings from `.env`. On Git Bash for Windows, prefix commands that pass `/Volumes/...` paths with `MSYS_NO_PATHCONV=1`.
+All of them read settings from `.env`. On Git Bash for Windows, prefix commands that pass `/Volumes/...` paths with `MSYS_NO_PATHCONV=1`.
 
-CI runs the same checks on every push and pull request to `main`. It uses no secrets and makes no calls to Databricks, AWS or AMFI.
+CI runs the same checks on every push to `dev` and `main` and on pull requests to `main`. It uses no secrets and makes no calls to Databricks, AWS or AMFI.
 
 ## Configuration and secrets
 
