@@ -84,9 +84,13 @@ Median worst fall over 3 years by category for Direct plans (Small Cap is deepes
 
 The screenshots were taken on 2026-11-20 just before two data-quality fixes found by looking at this dashboard: a 10x unit reset that showed as a 960% rolling return, and segregated-portfolio zero NAVs named "Seg. Portfolio" that were counted as errors. After the fixes the "Schemes with 3Y CAGR" counter reads 2,509 and the quarantined line stays near zero until August 2026.
 
+## Public dashboard (Streamlit)
+
+[dashboards/streamlit/app.py](dashboards/streamlit/app.py) mirrors the Databricks dashboard (KPIs, top 10 by category and plan, rolling 1-year returns for chosen funds, risk vs return, drawdown by category, data quality) but reads only the small Gold exports committed in [exports/gold/](exports/gold/) (5 Parquet files and a manifest, 2.4 MB, data as of 2026-11-15). It needs no Databricks or AWS credentials, so it keeps working when the free workspace is asleep. Run it locally with `pip install -r dashboards/streamlit/requirements.txt` and `streamlit run dashboards/streamlit/app.py`. Data: AMFI.
+
 ## Roadmap
 
-1. Public dashboard: small Gold summary exports in `exports/gold/` (Parquet plus a manifest of row counts and export time) that feed a permanent public Streamlit dashboard in a separate repo. No credentials in the public app. Data: AMFI.
+1. Deploy the Streamlit app on Streamlit Community Cloud and link it here.
 2. Performance benchmarks, Airflow orchestration, interview pack.
 
 ## Tech stack
