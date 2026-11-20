@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/twarangupta/mf-nav-lakehouse/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/twarangupta/mf-nav-lakehouse/actions/workflows/ci.yml)
 
+**Live dashboard:** [indian-mutual-funds-nav.streamlit.app](https://indian-mutual-funds-nav.streamlit.app/) (Streamlit, reads the committed Gold exports, data as of 2026-11-15)
+
 A daily batch pipeline that collects Net Asset Value (NAV) data for every Indian mutual fund scheme from AMFI, stores it in a Delta Lake lakehouse on Databricks using the Medallion architecture (Bronze, Silver, Gold), and computes fund analytics (rolling returns, CAGR, volatility, drawdown). Each step is idempotent and run from the command line today; the daily orchestration is designed for Apache Airflow (see below).
 
 **Status:** complete. Daily NAV files and almost 6 years of history (2021-01-01 to 2026-11-15) land in S3, flow through Bronze, a quality-gated Silver table and Gold fund analytics on Databricks, and are shown on a Databricks dashboard and a public Streamlit app. Every number below was measured on the real data. Orchestration is designed for Airflow but not deployed (steps run from the command line).
@@ -86,6 +88,8 @@ The screenshots were taken on 2026-11-20 just before two data-quality fixes foun
 
 ## Public dashboard (Streamlit)
 
+Live at [https://indian-mutual-funds-nav.streamlit.app/](https://indian-mutual-funds-nav.streamlit.app/).
+
 [dashboards/streamlit/app.py](dashboards/streamlit/app.py) mirrors the Databricks dashboard (KPIs, top 10 by category and plan, rolling 1-year returns for chosen funds, risk vs return, drawdown by category, data quality) but reads only the small Gold exports committed in [exports/gold/](exports/gold/) (5 Parquet files and a manifest, 2.4 MB, data as of 2026-11-15). It needs no Databricks or AWS credentials, so it keeps working when the free workspace is asleep. Run it locally with `pip install -r dashboards/streamlit/requirements.txt` and `streamlit run dashboards/streamlit/app.py`. Data: AMFI.
 
 ## Performance (measured, not assumed)
@@ -116,8 +120,7 @@ At 100x (about 1.2 billion NAV rows, 13 GB in Silver, thousands of files) the de
 
 ## Roadmap
 
-1. Deploy the Streamlit app on Streamlit Community Cloud and link it here.
-2. Run the designed Airflow DAG on an always-on host instead of command-line runs.
+1. Run the designed Airflow DAG on an always-on host instead of command-line runs.
 
 ## Tech stack
 
