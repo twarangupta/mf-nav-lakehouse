@@ -2,7 +2,7 @@
 
 Uploads the job file to your workspace, submits a one-time serverless run through the
 Jobs API (runs/submit), waits for it, and prints the result. This is the manual
-stand-in for what Airflow does in Phase 6.
+way jobs run today; the designed Airflow DAG would trigger saved jobs instead.
 
     python scripts/run_on_databricks.py src/jobs/bronze_nav.py \
         --source-path s3://<bucket>/raw/nav/date=2026-11-11/ --run-id manual-1

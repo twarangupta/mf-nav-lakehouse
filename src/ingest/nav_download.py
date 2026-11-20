@@ -2,7 +2,7 @@
 
 The file is saved exactly as received: no line is removed or changed, including the
 category and fund house header lines, because Bronze keeps the raw lines and Silver
-needs the file order. Airflow calls `land_daily_nav` in Phase 6; for now it can be
+needs the file order. The designed Airflow DAG would call `land_daily_nav`; today it is
 run by hand:
 
     python -m src.ingest.nav_download --date 2026-11-11

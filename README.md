@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/twarangupta/mf-nav-lakehouse/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/twarangupta/mf-nav-lakehouse/actions/workflows/ci.yml)
 
-A daily batch pipeline that collects Net Asset Value (NAV) data for every Indian mutual fund scheme from AMFI, stores it in a Delta Lake lakehouse on Databricks using the Medallion architecture (Bronze, Silver, Gold), computes fund analytics (rolling returns, CAGR, volatility, drawdown) and is orchestrated end to end by Apache Airflow.
+A daily batch pipeline that collects Net Asset Value (NAV) data for every Indian mutual fund scheme from AMFI, stores it in a Delta Lake lakehouse on Databricks using the Medallion architecture (Bronze, Silver, Gold), and computes fund analytics (rolling returns, CAGR, volatility, drawdown). Each step is idempotent and run from the command line today; the daily orchestration is designed for Apache Airflow (see below).
 
 **Status:** Phases 1 to 4 and the Databricks dashboard complete: daily NAV files and almost 6 years of history land in S3, flow through Bronze and a quality-gated Silver table, and Gold computes returns, CAGR, volatility, drawdown and category ranks for every active Growth scheme. Dashboards, performance and orchestration come next. Real numbers are added below as they are measured.
 
@@ -10,7 +10,7 @@ A daily batch pipeline that collects Net Asset Value (NAV) data for every Indian
 
 ```mermaid
 flowchart LR
-    A[AMFI NAVAll.txt<br/>and NAV history] --> B[Airflow<br/>Docker]
+    A[AMFI NAVAll.txt<br/>and NAV history] --> B[Downloader<br/>Python]
     B -->|upload, uploader key| C[(S3 raw landing<br/>raw/nav/date=...)]
     K[Databricks secret scope<br/>read-only S3 key] --> D
     C -->|boto3 GetObject| D[Databricks Bronze<br/>raw lines + metadata]
@@ -21,11 +21,11 @@ flowchart LR
     F --> H[Dashboard / calculators]
 ```
 
-Planned daily DAG: `check_source >> download_nav >> upload_raw >> trigger_databricks_bronze >> silver >> data_quality_gate >> gold >> notify`. The quality gate runs before Gold, so data that fails it never reaches Gold.
+Orchestration: the steps run today from the command line (`src/ingest/nav_download.py`, then `scripts/run_on_databricks.py` for Bronze, Silver and Gold). The daily schedule is designed, not deployed, as an Apache Airflow DAG: `check_source >> download_nav >> upload_raw >> trigger_databricks_bronze >> silver >> data_quality_gate >> gold >> notify`, with the quality gate before Gold. Because every step is idempotent (hash checks in S3 and Bronze, MERGE in Silver, full rebuild of Gold), rerunning a date never duplicates data.
 
 ## Key design choices
 
-- **Airflow downloads, Databricks processes.** Databricks Free Edition serverless restricts outbound internet, so the orchestrator lands each raw file and Spark only reads landed files. A raw copy is kept for replays.
+- **The downloader lands files, Databricks processes them.** Databricks Free Edition serverless restricts outbound internet, so a separate step (the downloader today, an Airflow task in the designed DAG) lands each raw file and Spark only reads landed files. A raw copy is kept for replays.
 - **S3 is the single raw landing zone.** Each daily file is saved byte for byte to `s3://<bucket>/raw/nav/date=YYYY-MM-DD/NAVAll.txt`. The Bronze job reads it with boto3 using a read-only IAM user key kept in a Databricks secret scope (never in code). The recommended Unity Catalog route (storage credential + IAM role with an external ID) was built but is refused on this setup: the Free Edition workspace runs in us-east-2, the AWS free-plan account is locked to ap-southeast-2, and the AWS free plan does not support cross-region features. Details: [infra/aws/README.md](infra/aws/README.md).
 - **Backfill in polite, restartable chunks.** History is fetched one 7-day range at a time, sequentially, with a pause and retries after 5, 15 and 45 s. A chunk already in S3 is skipped, and Bronze skips files whose hash it already has, so either step can be stopped and rerun safely.
 - **Bronze keeps every raw line, in order.** One row per line (data rows, category and fund house headers, blank lines) with its line number, because an AMFI header line applies to the rows below it. Reruns add nothing: a file already loaded for the same date with the same SHA-256 is skipped.
@@ -105,23 +105,22 @@ What it shows: at this size every query finishes in 0.4 to 0.8 s whatever the la
 ## Roadmap
 
 1. Deploy the Streamlit app on Streamlit Community Cloud and link it here.
-2. Airflow orchestration, interview pack.
+2. Run the designed Airflow DAG on an always-on host (for example a managed service) instead of command-line runs.
 
 ## Tech stack
 
-PySpark, Databricks (Free Edition, serverless), Delta Lake, Apache Airflow 3.x in Docker (LocalExecutor + Postgres), AWS S3 and IAM, Python 3.11, pytest, ruff, GitHub Actions.
+PySpark, Databricks (Free Edition, serverless), Delta Lake, AWS S3 and IAM, Streamlit, Apache Airflow 3 (orchestration designed, not deployed), Python 3.11, pytest, ruff, GitHub Actions.
 
 ## Repo layout
 
 ```
-dags/          Airflow DAGs
+dags/          reserved for the Airflow DAG (designed, not deployed)
 src/ingest/    downloaders: daily NAVAll.txt and the history backfill, to S3 byte for byte
 src/jobs/      PySpark jobs run on Databricks: bronze_nav.py, silver_nav.py, gold_nav.py
 scripts/       run a job on Databricks serverless; load the S3 reader key into Databricks secrets
 tests/         pytest unit tests (DAG integrity and PySpark tests added as code lands)
 .github/       CI workflow (ruff + pytest on every push and pull request)
 infra/aws/     least-privilege IAM policies (uploader, Databricks reader) and role templates
-infra/airflow/ local Airflow in Docker
 ```
 
 ## Run the checks locally
@@ -136,7 +135,7 @@ uv pip install --python .venv/Scripts/python.exe -e ".[dev]"   # .venv/bin/pytho
 
 The Spark tests need Java 17 (`JAVA_HOME`); without it they are skipped locally. CI installs Java and never skips them.
 
-## Run it by hand (before Airflow)
+## Run it by hand
 
 ```bash
 python -m src.ingest.nav_download                     # land today's file in S3
@@ -152,4 +151,4 @@ CI runs the same checks on every push and pull request to `main`. It uses no sec
 
 ## Configuration and secrets
 
-No secrets live in this repo. Copy `.env.example` to `.env` (git-ignored) and fill it in locally; Airflow reads credentials from its Connections and Variables. A test checks that every environment variable the code reads is listed in `.env.example` and that the example file contains no real secret values.
+No secrets live in this repo. Copy `.env.example` to `.env` (git-ignored) and fill it in locally; scripts read it from the environment, and Databricks jobs read the S3 key from a secret scope. A test checks that every environment variable the code reads is listed in `.env.example` and that the example file contains no real secret values.
