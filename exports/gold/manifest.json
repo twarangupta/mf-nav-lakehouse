@@ -1,0 +1,127 @@
+{
+  "dataset": "mf-nav-lakehouse gold exports",
+  "credit": "Data: AMFI (Association of Mutual Funds in India), www.amfiindia.com",
+  "as_of_date": "2026-11-15",
+  "exported_at_utc": "2026-11-20T13:02:31Z",
+  "total_bytes": 2378088,
+  "tables": [
+    {
+      "table": "mf_nav.gold.kpis",
+      "file": "kpis.parquet",
+      "delta_version": 13,
+      "rows": 1,
+      "columns": [
+        "as_of_date",
+        "active_growth_schemes",
+        "schemes_with_3y_cagr",
+        "schemes_with_5y_cagr",
+        "category_groups",
+        "active_schemes_with_nav_break",
+        "active_schemes_flat_nav",
+        "silver_nav_rows",
+        "silver_schemes",
+        "first_nav_date",
+        "computed_at"
+      ],
+      "bytes": 3945,
+      "sha256": "0fb0f3057533527c61cb225becc3305f7e3d56c325eb746c3a74f1f60e5251b2"
+    },
+    {
+      "table": "mf_nav.gold.fund_metrics",
+      "file": "fund_metrics.parquet",
+      "delta_version": 13,
+      "rows": 4704,
+      "columns": [
+        "scheme_code",
+        "scheme_name",
+        "fund_house",
+        "scheme_type",
+        "category",
+        "category_group",
+        "plan",
+        "latest_nav_date",
+        "latest_nav",
+        "nav_1y_ago_date",
+        "nav_3y_ago_date",
+        "nav_5y_ago_date",
+        "return_1y",
+        "cagr_3y",
+        "cagr_5y",
+        "obs_1y",
+        "volatility_1y",
+        "max_drawdown_3y",
+        "last_nav_break_date",
+        "metrics_nulled_for_break",
+        "is_flat_nav_1y",
+        "is_active",
+        "as_of_date",
+        "rank_cagr_3y_in_category",
+        "ranked_in_category_3y",
+        "rank_return_1y_in_category",
+        "ranked_in_category_1y",
+        "computed_at"
+      ],
+      "bytes": 248200,
+      "sha256": "f4729b9fd5c76a80d647eaa1bbf8da9ea70baa917c9359ad64b3f6234c6d2bab"
+    },
+    {
+      "table": "mf_nav.gold.category_summary",
+      "file": "category_summary.parquet",
+      "delta_version": 13,
+      "rows": 144,
+      "columns": [
+        "category_group",
+        "plan",
+        "active_schemes",
+        "schemes_with_3y",
+        "median_return_1y",
+        "median_cagr_3y",
+        "median_cagr_5y",
+        "median_volatility_1y",
+        "median_max_drawdown_3y",
+        "top_scheme_code_3y",
+        "top_scheme_name_3y",
+        "top_cagr_3y",
+        "computed_at"
+      ],
+      "bytes": 14224,
+      "sha256": "9a2afc6b166b2a859ea9aa0ed7c3ab3f5c1e31fa019d9cfb7fcade43927f582e"
+    },
+    {
+      "table": "mf_nav.gold.rolling_return_1y_monthly",
+      "file": "rolling_return_1y_monthly.parquet",
+      "delta_version": 13,
+      "rows": 142541,
+      "columns": [
+        "scheme_code",
+        "month",
+        "nav_date",
+        "nav",
+        "return_1y",
+        "computed_at"
+      ],
+      "bytes": 2104231,
+      "sha256": "386fbb6cda40e1e5c4d88879583580672267f9c03692f4c2cd910ba00216dbb5"
+    },
+    {
+      "table": "mf_nav.gold.dq_daily",
+      "file": "dq_daily.parquet",
+      "delta_version": 13,
+      "rows": 331,
+      "columns": [
+        "load_date",
+        "source_kind",
+        "files",
+        "data_rows",
+        "good_rows",
+        "quarantined_counted_rows",
+        "quarantined_known_rows",
+        "status",
+        "warnings_on_nav_date",
+        "computed_at"
+      ],
+      "bytes": 7488,
+      "sha256": "dd52c9547e1042fcd80f4d212fe918a6191554799ad921da9fcb1fc1f8f27c64"
+    }
+  ]
+}
