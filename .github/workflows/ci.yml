@@ -41,7 +41,7 @@ jobs:
       - name: Install the project and dev tools
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,export,dashboard]"
 
       - name: Lint (ruff check)
         run: ruff check .
@@ -52,4 +52,4 @@ jobs:
       - name: Unit tests (pytest)
         env:
           REQUIRE_SPARK: "1" # fail, never skip, if the Spark tests cannot start
-        run: pytest -v
+        run: pytest -v -rs

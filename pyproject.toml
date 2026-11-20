@@ -26,6 +26,12 @@ dev = [
 export = [
     "pyarrow>=15",
 ]
+# The public Streamlit app (dashboards/streamlit); CI installs it to run the app test.
+dashboard = [
+    "streamlit>=1.50",
+    "pandas>=2.2",
+    "altair>=5.4",
+]
 
 [tool.setuptools.packages.find]
 # Only src/ is an installable package; dags/, tests/, docs/, infra/ are not.
