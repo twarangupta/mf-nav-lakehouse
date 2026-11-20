@@ -4,7 +4,7 @@
 
 A daily batch pipeline that collects Net Asset Value (NAV) data for every Indian mutual fund scheme from AMFI, stores it in a Delta Lake lakehouse on Databricks using the Medallion architecture (Bronze, Silver, Gold), computes fund analytics (rolling returns, CAGR, volatility, drawdown) and is orchestrated end to end by Apache Airflow.
 
-**Status:** Phases 1 to 4 complete: daily NAV files and almost 6 years of history land in S3, flow through Bronze and a quality-gated Silver table, and Gold computes returns, CAGR, volatility, drawdown and category ranks for every active Growth scheme. Dashboards, performance and orchestration come next. Real numbers are added below as they are measured.
+**Status:** Phases 1 to 4 and the Databricks dashboard complete: daily NAV files and almost 6 years of history land in S3, flow through Bronze and a quality-gated Silver table, and Gold computes returns, CAGR, volatility, drawdown and category ranks for every active Growth scheme. Dashboards, performance and orchestration come next. Real numbers are added below as they are measured.
 
 ## Architecture
 
@@ -31,7 +31,7 @@ Planned daily DAG: `check_source >> download_nav >> upload_raw >> trigger_databr
 - **Bronze keeps every raw line, in order.** One row per line (data rows, category and fund house headers, blank lines) with its line number, because an AMFI header line applies to the rows below it. Reruns add nothing: a file already loaded for the same date with the same SHA-256 is skipped.
 - **Least privilege, two separate keys.** The uploader ([policy](infra/aws/iam_policy_airflow_uploader.json)) can list, read and write under `raw/` but cannot delete. The Databricks reader ([policy](infra/aws/iam_policy_databricks_read.json)) can only list and read. If either key leaks, only that one is revoked.
 - **Silver: parse, check, gate, MERGE.** Each data line inherits the category and fund house from the AMFI header lines above it (a window ordered by line number), is parsed by its file's own column layout (the daily file and the history report differ), and gets plan (Direct/Regular) and option (Growth/IDCW/Bonus) from simple, tested rules. Rows that break a hard rule go to `silver.nav_quarantine` with a reason; a file with more than 1% bad rows, or an unknown header, is rejected as a whole and the job fails, so Gold never sees it. Good rows are MERGEd on (scheme_code, nav_date), so reruns never double count. Big day-over-day moves on Growth plans are flagged in `silver.dq_warnings`, not removed.
-- **Gold: honest fund analytics.** "NAV n years ago" is an as-of lookup (last NAV on or before the date, ignored if more than 7 days stale), so holidays are handled and young funds get no partial numbers. Daily returns are measured only between real NAV dates (no forward filling), and volatility is annualised with each fund's real number of NAVs per year (median 247; 365 for liquid funds). Metrics are left empty when the window contains a unit reset flagged in Silver (47 schemes) or the NAV is flat (6 daily-dividend style plans), rather than showing a wrong number. Funds are ranked within a standardised category group and plan, because AMFI writes some categories two ways.
+- **Gold: honest fund analytics.** "NAV n years ago" is an as-of lookup (last NAV on or before the date, ignored if more than 7 days stale), so holidays are handled and young funds get no partial numbers. Daily returns are measured only between real NAV dates (no forward filling), and volatility is annualised with each fund's real number of NAVs per year (median 247; 365 for liquid funds). Metrics (and rolling-return points) are left empty when the window contains a NAV reset: a one-day move of +100% or more, or -50% or less, such as a 10-to-1 unit split (16 active schemes) or the NAV is flat (6 daily-dividend style plans), rather than showing a wrong number. Funds are ranked within a standardised category group and plan, because AMFI writes some categories two ways.
 - **Returns use Growth plans only.** IDCW (dividend) NAVs drop on every payout, so they are not total-return series. CAGR, rolling returns and volatility use Growth option plans only. IDCW rows stay in Silver because their latest NAV is still valid.
 - **Category comes from AMFI.** Category and fund house are taken from the header lines of the latest daily NAVAll.txt; history is used for NAV values only.
 - **Why Spark at this size.** About 14M rows and 2 GB of raw text would fit on one machine (DuckDB or Polars would handle it). Spark is used because Databricks and Delta Lake are Spark-native and the same code runs unchanged at 100x the volume.
@@ -57,18 +57,36 @@ Planned daily DAG: `check_source >> download_nav >> upload_raw >> trigger_databr
 | History load into Bronze | 12,443,113 lines from 306 files in 658 s (39 batches); rerun adds 0 rows |
 | Bronze total | 12,529,520 lines from 309 files; no missing or duplicate line numbers |
 | Silver `mf_nav.silver.nav` | 11,653,085 NAV records, one per scheme per day (17,261 schemes), every row with an AMFI category and fund house |
-| Rows quarantined with a reason | 167,407 (159,416 expected zero NAVs of segregated portfolios, 7,978 other non-positive NAVs, 13 "N.A.") |
+| Rows quarantined with a reason | 167,407 (166,024 expected zero NAVs of segregated portfolios, 1,370 other non-positive NAVs, 13 "N.A.") |
 | Quality gate | 309 files checked, 0 rejected; worst file 0.26% bad (threshold 1%) |
 | Silver full rebuild from Bronze | 120 s on serverless; rerun with no new files 17 s |
 | Recovery drill | a deliberately corrupted day (8,716 rows) found with Delta time travel and restored with `RESTORE TABLE` |
-| Gold `mf_nav.gold.fund_metrics` (as of 2026-11-15) | 3,716 active Growth schemes; 2,489 with a 3Y CAGR, 1,805 with 5Y; medians: 1Y return 4.24%, 3Y CAGR 9.64%, volatility 13.72%, max drawdown -14.82% |
+| Gold `mf_nav.gold.fund_metrics` (as of 2026-11-15) | 3,716 active Growth schemes; 2,509 with a 3Y CAGR, 1,809 with 5Y; medians: 1Y return 4.29%, 3Y CAGR 9.70%, volatility 13.79%, max drawdown -14.91% |
 | Gold build | 6 tables in 45 s on serverless; dashboard tables under 2 MB |
 | Spot-check | 1Y, 3Y, 5Y returns of 4 well-known funds recomputed independently in plain Python from mfapi.in: 0.00 basis points difference |
-| Unit tests | 78, on a local SparkSession (Java 17) |
+| Unit tests | 92, on a local SparkSession (Java 17) |
+
+## Databricks dashboard
+
+An AI/BI dashboard on the Serverless Starter warehouse, built from the six queries in [dashboards/sql/](dashboards/sql/) and published with the owner's data permissions. Data: AMFI.
+
+![Dashboard top: KPIs and top 10 funds](images/databricks_dashboard_top.png)
+
+Headline counters (3,716 active Growth schemes, 11,653,085 clean NAV records, latest NAV date 2026-11-15) and the top 10 funds by 3-year CAGR for a chosen category and plan: in Equity - Flexi Cap, Direct, ITI Flexi Cap leads at 19.82%, then Bank of India Flexi Cap 18.69% and 360 ONE Flexicap 18.60%.
+
+![Dashboard middle: rolling returns and risk vs return](images/databricks_dashboard_middle.png)
+
+Rolling 1-year return at each month end for funds picked in a filter, and every fund's 3-year CAGR against its 1-year volatility, coloured by asset class (debt funds cluster at low risk and 6 to 8% a year).
+
+![Dashboard bottom: drawdown by category and data quality](images/databricks_dashboard_bottom.png)
+
+Median worst fall over 3 years by category for Direct plans (Small Cap is deepest at -24.14%; most debt categories stay between 0 and -5%), and data quality per month: rows quarantined against expected exclusions.
+
+The screenshots were taken on 2026-11-20 just before two data-quality fixes found by looking at this dashboard: a 10x unit reset that showed as a 960% rolling return, and segregated-portfolio zero NAVs named "Seg. Portfolio" that were counted as errors. After the fixes the "Schemes with 3Y CAGR" counter reads 2,509 and the quarantined line stays near zero until August 2026.
 
 ## Roadmap
 
-1. Dashboards: a Databricks SQL dashboard on Gold (screenshots in this README), and small Gold summary exports in `exports/gold/` (Parquet plus a manifest of row counts and export time) that feed a permanent public Streamlit dashboard in a separate repo. No credentials in the public app. Data: AMFI.
+1. Public dashboard: small Gold summary exports in `exports/gold/` (Parquet plus a manifest of row counts and export time) that feed a permanent public Streamlit dashboard in a separate repo. No credentials in the public app. Data: AMFI.
 2. Performance benchmarks, Airflow orchestration, interview pack.
 
 ## Tech stack
