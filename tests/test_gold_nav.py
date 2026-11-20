@@ -196,3 +196,22 @@ def test_flat_nav_plan_gets_no_return_metrics(spark):
     assert m.is_flat_nav_1y is True
     assert m.return_1y is None and m.cagr_3y is None and m.volatility_1y is None
     assert m.rank_return_1y_in_category is None
+
+
+def test_reset_breaks_keep_only_resets(spark):
+    w = spark.createDataFrame(
+        [(1, date(2022, 8, 17), 9.0), (2, date(2026, 2, 2), -0.25), (3, date(2024, 2, 5), -0.9)],
+        "scheme_code int, nav_date date, pct_change double",
+    )
+    assert sorted(r.scheme_code for r in gd.reset_breaks(w).collect()) == [1, 3]
+
+
+def test_rolling_return_drops_windows_that_span_a_reset(spark):
+    days = _business_days(date(2021, 1, 4), 700)
+    rows = [(1, d, 100.0 if i < 400 else 1000.0) for i, d in enumerate(days)]  # 10x reset
+    breaks = spark.createDataFrame([(1, days[400])], "scheme_code int, nav_date date")
+    rolling = gd.rolling_return_1y(_series(spark, rows), breaks).collect()
+    assert rolling  # points before the reset and a year after it remain
+    assert max(r.return_1y for r in rolling) < 0.01  # no fake +900% points
+    without = gd.rolling_return_1y(_series(spark, rows)).collect()
+    assert max(r.return_1y for r in without) > 8

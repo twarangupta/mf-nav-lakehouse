@@ -42,6 +42,8 @@ GOLD = "mf_nav.gold"
 
 MAX_STALE_DAYS = 7  # as-of lookups and "active scheme" tolerance
 MIN_OBS_1Y = 200  # fewer NAVs than this in the last year: volatility is null
+RESET_MIN_RISE = 1.0  # +100% or more in one step: a reset, not a market move
+RESET_MAX_FALL = -0.5  # -50% or less in one step: a reset
 FLAT_NAV_MAX_RANGE = 0.001  # NAV range under 0.1% over a year: not a growth series
 
 
@@ -171,9 +173,21 @@ def growth_series(spark: SparkSession) -> DataFrame:
     )
 
 
+def reset_breaks(warnings: DataFrame) -> DataFrame:
+    """Keep only flagged moves that look like a NAV reset, not a market move.
+
+    Silver warns on any Growth move above 20%. Measured on our data, moves of +100% or
+    more, or -50% or less, are unit splits (ratios about 0.01, 0.1, 10) or segregated
+    portfolio revaluations (ratios 2 to 4); moves between are mostly real markets, for
+    example the silver ETF fall in February 2026. Only resets break a return window.
+    """
+    big = (F.col("pct_change") >= RESET_MIN_RISE) | (F.col("pct_change") <= RESET_MAX_FALL)
+    return warnings.where(big).select("scheme_code", "nav_date")
+
+
 def nav_breaks(spark: SparkSession) -> DataFrame:
-    """Dates of Growth NAV jumps flagged by Silver's soft rule (scheme_code, nav_date)."""
-    return spark.table(SILVER_WARNINGS).select("scheme_code", "nav_date")
+    """Dates of NAV resets (scheme_code, nav_date), from Silver's warnings."""
+    return reset_breaks(spark.table(SILVER_WARNINGS))
 
 
 def fund_metrics(series: DataFrame, breaks: DataFrame | None = None) -> DataFrame:
@@ -337,8 +351,12 @@ def category_summary(metrics: DataFrame) -> DataFrame:
     return summary.join(top, ["category_group", "plan"], "left")
 
 
-def rolling_return_1y(series: DataFrame) -> DataFrame:
-    """Rolling 1-year return for every scheme and real NAV date (as-of, 7-day tolerance)."""
+def rolling_return_1y(series: DataFrame, breaks: DataFrame | None = None) -> DataFrame:
+    """Rolling 1-year return for every scheme and real NAV date (as-of, 7-day tolerance).
+
+    A point whose 1-year window contains a NAV reset (`breaks`) is dropped, the same
+    rule as in fund_metrics; otherwise a 10-to-1 split shows as a year of +900%.
+    """
     nav = series.select("scheme_code", "nav_date", "nav")
     queries = nav.select(
         "scheme_code",
@@ -351,13 +369,25 @@ def rolling_return_1y(series: DataFrame) -> DataFrame:
         F.col("asof_date").alias("nav_1y_ago_date"),
         F.col("asof_nav").alias("nav_1y_ago"),
     )
-    return (
+    rolling = (
         nav.join(found, ["scheme_code", "nav_date"])
         .where(F.col("nav_1y_ago") > 0)
         .withColumn(
             "return_1y", F.col("nav").cast("double") / F.col("nav_1y_ago").cast("double") - 1
         )
     )
+    if breaks is None:
+        return rolling
+    b = breaks.select("scheme_code", F.col("nav_date").alias("_break"))
+    spans_break = (
+        rolling.join(F.broadcast(b), "scheme_code")
+        .where(
+            (F.col("_break") > F.col("nav_1y_ago_date")) & (F.col("_break") <= F.col("nav_date"))
+        )
+        .select("scheme_code", "nav_date")
+        .distinct()
+    )
+    return rolling.join(spans_break, ["scheme_code", "nav_date"], "left_anti")
 
 
 def month_end(rolling: DataFrame) -> DataFrame:
@@ -413,7 +443,7 @@ def run(spark: SparkSession, run_id: str, force: bool = False) -> dict:
         "Gold: medians per category and plan over active Growth schemes",
     )
     counts["rolling_return_1y"] = write(
-        rolling_return_1y(series).select("*", *stamp),
+        rolling_return_1y(series, nav_breaks(spark)).select("*", *stamp),
         "rolling_return_1y",
         "Gold: rolling 1-year return per Growth scheme and NAV date",
     )
