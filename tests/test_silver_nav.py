@@ -222,3 +222,25 @@ def test_short_line_is_quarantined_not_a_crash_in_ansi_mode(spark):
     finally:
         spark.conf.set("spark.sql.ansi.enabled", "false")
     assert reasons == ["bad_field_count"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Franklin India Credit Risk Fund (No. of segregated portfolios-3)",
+        "Baroda BNP Paribas Credit Risk fund -Direct - Growth option -Seg. Portfolio 2",
+        "Baroda BNP Paribas Credit risk fund -Defunct -Growth option -Seg-Portfolio 2",
+    ],
+)
+def test_zero_nav_of_segregated_portfolio_names_is_a_known_exclusion(spark, name):
+    lines = HIST_LINES[:6] + [f"150001;{name};Direct Plan;Growth;I;;0.0000;03-Nov-2025"]
+    checked = sv.quality_reason(_parsed(_bronze(spark, HIST, lines, date(2025, 11, 3)))).first()
+    assert checked.dq_reason == "zero_nav_segregated_portfolio"
+    assert checked.dq_counts_toward_gate is False
+
+
+def test_bare_dcw_word_means_idcw(spark):
+    df = spark.createDataFrame([("DCW PAYOUT", "X Fund")], "o string, n string")
+    assert df.select(sv.derive_option(df.o, df.n).alias("x")).first().x == "IDCW"
+    df = spark.createDataFrame([("DCW", "X Fund")], "o string, n string")
+    assert df.select(sv.derive_option(df.o, df.n).alias("x")).first().x == "IDCW"

@@ -141,7 +141,7 @@ def _option_of(text: F.Column) -> F.Column:
     Growth ("Growth Opportunities Fund - IDCW"); "dividend yield" is a fund style, not
     a payout option, so it is removed first ("Dividend Yield Fund - Growth")."""
     text = F.regexp_replace(F.lower(text), "dividend yield", "")
-    idcw = r"idcw|dividend|income distribution|payout|re-?invest|dcw"
+    idcw = r"idcw|dividend|income distribution|payout|re-?invest|\bdcw\b"
     return (
         F.when(text.rlike(idcw), "IDCW")
         .when(text.contains("bonus"), "Bonus")
@@ -207,7 +207,11 @@ def parse_rows(with_headers: DataFrame) -> DataFrame:
 
 def quality_reason(parsed: DataFrame) -> DataFrame:
     """Add dq_reason (null = good row) and dq_counts_toward_gate. First failing rule wins."""
-    is_segregated = F.lower(F.coalesce(F.col("scheme_name"), F.lit(""))).contains("segregat")
+    # Segregated portfolios are named "... Segregated Portfolio ...", "Seg. Portfolio 2" or
+    # "Seg-Portfolio 1" (14 Baroda BNP Paribas schemes from Sept 2024 use the short forms).
+    is_segregated = F.lower(F.coalesce(F.col("scheme_name"), F.lit(""))).rlike(
+        "segregat|seg[ .-]*portfolio"
+    )
     reason = (
         F.when(F.col("layout").isNull(), "unknown_column_layout")
         .when(F.col("_n_fields") != 8, "bad_field_count")
